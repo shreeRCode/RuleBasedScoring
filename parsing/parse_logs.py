@@ -6,7 +6,7 @@ from typing import Iterator
 
 from parsing.schema import LogRecord, priority_to_log_level
 
-# ── Regex for the syslog line ─────────────────────────────────────────────────
+#  Regex for the syslog line
 # Group 1: priority integer  e.g. 190
 # Group 2: timestamp         e.g. "Mar 12 10:00:00"
 # Group 3: host              e.g. "sw-access-02"
@@ -20,16 +20,12 @@ _SYSLOG_RE = re.compile(
     r"(.+)$"                             # message
 )
 
-# ── Per-service action extraction rules ──────────────────────────────────────
+#  Per-service action extraction rules
 # Returns (event_type, event_action) given service name + message text.
 # Keeps parse_logs.py self-contained; no external lookup needed here.
 
 def _extract_event(service: str, message: str) -> tuple[str, str]:
-    """
-    Map (service, message) → (event_type, event_action).
-    event_type  = coarse category  (mirrors service name mostly)
-    event_action = fine-grained action label used by feature_service.py lookups
-    """
+ 
     msg = message.lower()
 
     if service == "OSPF":

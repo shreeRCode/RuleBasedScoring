@@ -14,6 +14,7 @@ EVENT_TYPE_SCORE_TABLE: dict[tuple[str,str],float]={
     ("OSPF", "NEIGHBOR_DOWN"):        4.0,
     ("OSPF", "STATE_CHANGE"):         2.5,
     ("OSPF", "*"):                    2.5,
+
     #SECURITY
     ("SECURITY", "PORT_SCAN"):        4.0,
     ("SECURITY", "MAC_BLOCKED"):      4.0,
@@ -56,10 +57,11 @@ def get_severity_score(log_level: str) -> float:
     return score
 #Map (event_type,event_action) to event type score
 def get_event_type_score(event_type: str, event_action: str)-> float:
-    et= event_type.upper() if event_type else "*"
+    et= event_type.upper() if event_type else "*"#what if event_type is * nothing matches
     ea= event_action.upper() if event_action else "*"
 
     score= EVENT_TYPE_SCORE_TABLE.get((et,ea))
+    
     if score is not None:
         logger.debug("event_type_score(%s,%s) = %.1f[exact]",et,ea,score)
         return score

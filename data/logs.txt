@@ -9998,3 +9998,6 @@
 <189>Mar 12 15:33:14 sw-core-01 SECURITY: MAC C2:30:8E:C3:B0:D7 blocked due to security policy
 <189>Mar 12 15:33:16 sw-access-03 SECURITY: MAC 80:97:BC:F0:F2:31 blocked due to security policy
 <190>Mar 12 15:33:18 sw-core-02 OSPF: Neighbor with Router ID 192.168.13.159 changed state from FULL to DOWN
+<186>Mar 12 10:01:00 sw-core-01 OSPF: full to down
+<187>Mar 12 10:01:05 sw-core-01 SECURITY: port scan detected
+<188>Mar 12 10:01:10 sw-core-01 PORT: state to down
