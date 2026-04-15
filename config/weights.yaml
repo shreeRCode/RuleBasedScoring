@@ -4,28 +4,28 @@ w1: 0.5 # severity_score  — carries the most weight
 w2: 0.3 # event_type_score — domain knowledge table
 w3: 0.2 # anomaly_score   — binary: 1 if near a counter spike, else 0
 
-# --- importance_score formula weights ---
+#  importance_score formula weights
 # importance_score = (alpha * event_weight) + (beta * log(freq+1)) + (gamma * corr_score)
 alpha: 0.60 # event_weight contribution
 beta: 0.25 # log-scaled frequency contribution (log dampens large bursts)
 gamma: 0.15 # correlation cluster boost
 
-# --- Label bucket thresholds (lower-bound inclusive) ---
-# importance_score < threshold_low            -> ignore
+# Label bucket thresholds (lower-bound inclusive)
+# importance_score < threshold_low-> ignore
 # threshold_low   <= score < threshold_medium -> low
 # threshold_medium <= score < threshold_critical -> medium
-# score >= threshold_critical                 -> critical
+# score >= threshold_critical-> critical
 threshold_ignore: 0.0
 threshold_low: 0.5
 threshold_medium: 1.0
 threshold_high: 1.6
 threshold_critical: 2.0
 
-# --- Frequency sliding window (seconds) ---
+#  Frequency sliding window (seconds)
 frequency_window_seconds: 60
 
-# --- Anomaly proximity window (seconds) ---
+#  Anomaly proximity window (seconds)
 anomaly_proximity_delta_seconds: 30
 
-# --- Correlation grouping window (seconds) ---
+#  Correlation grouping window (seconds)
 correlation_window_seconds: 30
