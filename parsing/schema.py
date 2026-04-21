@@ -1,12 +1,10 @@
-
-
 from dataclasses import dataclass, field
 from typing import Optional
 
 
 @dataclass
 class LogRecord:
-    #  Stage 1: Populated by parse_logs.py 
+    # ── Stage 1: Populated by parse_logs.py ──────────────────────────────
     timestamp:        str            = ""   # "Mar 12 10:00:00"
     log_level:        str            = ""   # "INFO" | "WARN" | "ERROR" | "CRITICAL"
     host:             str            = ""   # "sw-core-01", "sw-access-02", …
@@ -16,27 +14,38 @@ class LogRecord:
     message:          str            = ""   # full raw message text
     raw_line:         str            = ""   # original unparsed syslog line
 
-    #  Stage 1: Populated by template_extraction.py 
+    # ── Stage 1: Populated by template_extraction.py ──────────────────────
     template_id:      str            = ""   # e.g. "OSPF_NEIGHBOR_DOWN"
 
-    #  Stage 2: Populated by features/ modules 
+    # ── Stage 2: Populated by features/ modules ───────────────────────────
     severity_score:   float          = 0.0  # 1–4  from log_level
     event_type_score: float          = 0.0  # 1–4  from event_type + event_action lookup
+    # FIX 1: Added confidence and scoring_tier fields to carry ScoredResult
+    # data through the pipeline. Previously get_event_type_score() returned
+    # only a float with no signal about how trustworthy the score was.
+    event_type_confidence: float     = 1.0  # 0.0–1.0 from scoring tier
+    event_type_tier:  str            = ""   # "exact"|"wildcard"|"pattern"|"keyword"|"fallback"
     anomaly_score:    float          = 0.0  # 0 or 1  from anomaly_proximity.py
     frequency:        int            = 0    # count of same template_id in last 60 s
 
-    #  Stage 3: Populated by scoring/event_weight.py 
+    # FIX 2: Added novelty_score field. Previously frequency (raw int) was
+    # fed into log(frequency+1) which GREW with volume — rewarding noisy logs.
+    # novelty_score replaces it: high when rare or spiking, low when routine.
+    novelty_score:    float          = 1.0  # 0.0–1.0 from novelty calculation
+
+    # ── Stage 3: Populated by scoring/event_weight.py ─────────────────────
     event_weight:     float          = 0.0  # w1·sev + w2·evt + w3·anom
 
-    #  Stage 4: Populated by correlation/correlation_engine.py 
+    # ── Stage 4: Populated by correlation/correlation_engine.py ───────────
     correlation_id:   Optional[str]  = None  # UUID shared by a correlated cluster
     correlation_score: float         = 0.0   # proportional to cluster size
 
-    #  Stage 5: Populated by scoring/importance_score.py 
-    importance_score: float          = 0.0   # α·ew + β·log(freq+1) + γ·corr
-    label:            str            = ""    # "Ignore"|"Low"|"Medium"|"Critical"
+    # ── Stage 5: Populated by scoring/importance_score.py ─────────────────
+    importance_score: float          = 0.0   # α·ew·conf + β·novelty + γ·corr
+    label:            str            = ""    # "ignore"|"low"|"medium"|"high"|"critical"
 
 
+# ── Syslog priority → log level mapping ──────────────────────────────────────
 
 PRIORITY_TO_LEVEL: dict[int, str] = {
     # facility=23 (local7), severity 0-7
@@ -49,6 +58,7 @@ PRIORITY_TO_LEVEL: dict[int, str] = {
     # <190> sev=6 INFO     → mapped to INFO
     # <191> sev=7 DEBUG    → mapped to INFO
 }
+
 
 def priority_to_log_level(priority: int) -> str:
     """Convert raw syslog <PRI> integer to a scoring log_level string."""

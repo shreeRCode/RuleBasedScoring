@@ -1,3 +1,5 @@
+
+
 import math
 import yaml
 import os
@@ -9,18 +11,18 @@ logger = logging.getLogger(__name__)
 LABEL_IGNORE   = "ignore"
 LABEL_LOW      = "low"
 LABEL_MEDIUM   = "medium"
+LABEL_HIGH     = "high"
 LABEL_CRITICAL = "critical"
-LABEL_HIGH = "high" 
 
 _DEFAULT_CONFIG: dict[str, float] = {
     "alpha": 0.60,
     "beta":  0.25,
     "gamma": 0.15,
 
-    "threshold_low":      0.5,   # was 0.8
+    "threshold_low":      0.5,
     "threshold_medium":   1.0,
-        "threshold_high": 1.6,# was 1.6
-    "threshold_critical": 2.0   # was 2.5
+    "threshold_high":     1.6,
+    "threshold_critical": 2.0,
 }
 
 _config_cache: dict[str, dict[str, float]] = {}
@@ -28,13 +30,13 @@ _config_cache: dict[str, dict[str, float]] = {}
 
 def _load_config(config_path: str) -> dict[str, float]:
     if not os.path.exists(config_path):
+        # FIX 3: original had 4 positional args but only 3 format slots → TypeError
         logger.warning(
             "weights.yaml not found at '%s' — using defaults. "
             "Active thresholds: low=%.1f medium=%.1f critical=%.1f",
             config_path,
             _DEFAULT_CONFIG["threshold_low"],
             _DEFAULT_CONFIG["threshold_medium"],
-            _DEFAULT_CONFIG["threshold_high"],
             _DEFAULT_CONFIG["threshold_critical"],
         )
         return _DEFAULT_CONFIG.copy()
@@ -47,9 +49,11 @@ def _load_config(config_path: str) -> dict[str, float]:
                   for key, default in _DEFAULT_CONFIG.items()}
 
         logger.info(
-            "importance_score config loaded: low=%.2f medium=%.2f critical=%.2f",
+            "importance_score config loaded: low=%.2f medium=%.2f "
+            "high=%.2f critical=%.2f",
             loaded["threshold_low"],
             loaded["threshold_medium"],
+            loaded["threshold_high"],
             loaded["threshold_critical"],
         )
         return loaded
@@ -59,10 +63,10 @@ def _load_config(config_path: str) -> dict[str, float]:
         return _DEFAULT_CONFIG.copy()
 
 
-def get_label(score, cfg):
+def get_label(score: float, cfg: dict[str, float]) -> str:
     if score >= cfg["threshold_critical"]:
         return LABEL_CRITICAL
-    if score >= cfg["threshold_high"]:    
+    if score >= cfg["threshold_high"]:
         return LABEL_HIGH
     if score >= cfg["threshold_medium"]:
         return LABEL_MEDIUM
@@ -75,17 +79,31 @@ def compute_importance_score(
     record: LogRecord,
     config_path: str = "config/weights.yaml",
 ) -> tuple[float, str]:
+    """
+    Compute importance_score and label for a single record.
 
+    Reads from record:
+        event_weight           (set by event_weight.py)
+        event_type_confidence  (set by feature_service.py — NEW)
+        novelty_score          (set by novelty.py — NEW, replaces frequency)
+        correlation_score      (set by correlation_engine.py)
+
+    Writes to record:
+        importance_score
+        label
+    """
     if config_path not in _config_cache:
         _config_cache[config_path] = _load_config(config_path)
 
     cfg = _config_cache[config_path]
 
-    freq_term = min(math.log(record.frequency + 1), 3.0)
+    # FIX 1: novelty replaces log(frequency + 1)
+    novelty_term = record.novelty_score          # already 0.0–1.0
 
+    # FIX 2: confidence discounts uncertain event_weight
     importance_score = (
-        (cfg["alpha"] * record.event_weight)
-        + (cfg["beta"]  * freq_term)
+        (cfg["alpha"] * record.event_weight * record.event_type_confidence)
+        + (cfg["beta"]  * novelty_term)
         + (cfg["gamma"] * record.correlation_score)
     )
 
@@ -96,11 +114,11 @@ def compute_importance_score(
 
     logger.info(
         "importance_score=%.4f  label=%s  "
-        "[ew=%.2f] [freq=%.2f] [corr=%.2f] "
+        "[ew=%.2f × conf=%.2f] [novelty=%.4f] [corr=%.2f] "
         "host=%s  %s/%s",
         importance_score, label,
-        record.event_weight,
-        freq_term,
+        record.event_weight, record.event_type_confidence,
+        novelty_term,
         record.correlation_score,
         record.host,
         record.event_type,

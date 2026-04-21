@@ -6,8 +6,6 @@ import math
 from datetime import datetime
 
 # A single time-window bucket duration in seconds.
-# All events within the same bucket + same (host, event_type, event_action) 
-# are considered correlated.
 WINDOW_SECONDS: int = 300  # 5-minute sliding window
 
 
