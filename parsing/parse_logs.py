@@ -4,7 +4,7 @@ from typing import Iterator
 
 from parsing.schema import LogRecord, priority_to_log_level
 
-# ── Syslog line regex ────────────────────────────────────────────────────
+# ── Syslog line regex 
 # Group 1: priority integer  e.g. 190
 # Group 2: timestamp         e.g. "Mar 12 10:00:00"
 # Group 3: host              e.g. "sw-core-01"
@@ -20,7 +20,7 @@ _SYSLOG_RE = re.compile(
 )
 
 
-# ── Per-service action extraction ────────────────────────────────────────
+# ── Per-service action extraction 
 
 def _extract_event(service: str, message: str) -> tuple[str, str]:
     """
@@ -29,7 +29,7 @@ def _extract_event(service: str, message: str) -> tuple[str, str]:
     """
     msg = message.lower()
 
-    # ── APP ──────────────────────────────────────────────────────────────
+    # ── APP ──────────
     if service == "APP":
         if "authentication failed" in msg:
             return "APP", "authentication failed"
@@ -41,7 +41,7 @@ def _extract_event(service: str, message: str) -> tuple[str, str]:
             return "APP", "User login success"
         return "APP", "GENERIC"
 
-    # ── FW ───────────────────────────────────────────────────────────────
+    # ── FW ───────────
     if service == "FW":
         if "connection denied" in msg:
             return "FW", "connection denied"
@@ -49,7 +49,7 @@ def _extract_event(service: str, message: str) -> tuple[str, str]:
             return "FW", "connection allowed"
         return "FW", "GENERIC"
 
-    # ── WEB ──────────────────────────────────────────────────────────────
+    # ── WEB ──────────
     if service == "WEB":
         if "/.env" in msg:
             return "WEB", "GET /.env"
@@ -87,7 +87,7 @@ def _extract_event(service: str, message: str) -> tuple[str, str]:
             return "ROUTING", "route removed"
         return "ROUTING", "GENERIC"
 
-    # ── IDM ──────────────────────────────────────────────────────────────
+    # ── IDM ──────────
     if service == "IDM":
         if "privilege escalation" in msg:
             return "IDM", "privilege escalation attempt"
@@ -95,7 +95,7 @@ def _extract_event(service: str, message: str) -> tuple[str, str]:
             return "IDM", "ACL error"
         return "IDM", "GENERIC"
 
-    # ── PORT ─────────────────────────────────────────────────────────────
+    # ── PORT ─────────
     if service == "PORT":
         if "state to down" in msg:
             return "PORT", "port changed state to down"
@@ -143,7 +143,7 @@ def _extract_event(service: str, message: str) -> tuple[str, str]:
     return service, "UNKNOWN"
 
 
-# ── Line parser ──────────────────────────────────────────────────────────
+# ── Line parser ──────
 
 def parse_line(raw_line: str) -> LogRecord | None:
     """
@@ -175,7 +175,7 @@ def parse_line(raw_line: str) -> LogRecord | None:
     )
 
 
-# ── File parser ──────────────────────────────────────────────────────────
+# ── File parser ──────
 
 def parse_file(log_path: str | Path) -> Iterator[LogRecord]:
     """
@@ -193,7 +193,7 @@ def parse_file(log_path: str | Path) -> Iterator[LogRecord]:
                 yield record
 
 
-# ── CLI quick-check ──────────────────────────────────────────────────────
+# ── CLI quick-check ──
 
 if __name__ == "__main__":
     import sys

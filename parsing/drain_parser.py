@@ -6,7 +6,7 @@ class DrainParser:
     def __init__(self):
         config = TemplateMinerConfig()
 
-        # 🔥 Manual config (since load_default() not available)
+        #  Manual config (since load_default() not available)
         config.drain_sim_th = 0.4
         config.drain_depth = 4
 
@@ -20,7 +20,7 @@ class DrainParser:
 
         result = self.miner.add_log_message(message)
 
-        # 🔥 Handle version differences safely
+        #  Handle version differences safely
         cluster_id = result.get("cluster_id")
 
         # Some versions use "template_mined", others "template"

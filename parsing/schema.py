@@ -45,7 +45,7 @@ class LogRecord:
     label:            str            = ""    # "ignore"|"low"|"medium"|"high"|"critical"
 
 
-# ── Syslog priority → log level mapping ──────────────────────────────────────
+# ── Syslog priority → log level mapping 
 
 PRIORITY_TO_LEVEL: dict[int, str] = {
     # facility=23 (local7), severity 0-7

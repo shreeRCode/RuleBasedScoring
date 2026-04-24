@@ -13,9 +13,9 @@ from correlation.clustering_utils import (
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────
-# 🔥 Event Families (expandable)
-# ─────────────────────────────────────────────────────────────
+
+#  Event Families (expandable)
+
 
 EVENT_FAMILIES = {
     "NETWORK_DOWN": {
@@ -38,9 +38,9 @@ EVENT_FAMILIES = {
 }
 
 
-# ─────────────────────────────────────────────────────────────
-# 🔥 Correlation Engine
-# ─────────────────────────────────────────────────────────────
+
+#  Correlation Engine
+
 
 class CorrelationEngine:
 
@@ -86,7 +86,7 @@ class CorrelationEngine:
         bucket = self._parse_bucket(record.timestamp)
         family = self._get_event_family(record)
 
-        # 🔥 FIX: add granularity to avoid mega-clusters
+        #  FIX: add granularity to avoid mega-clusters
         return (
             f"{family}|"
             f"{record.host}|"

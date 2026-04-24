@@ -36,7 +36,7 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
    
     assign_template_ids_batch(records)
 
-    # 🔥 IMPORTANT: fallback event_type
+    # IMPORTANT: fallback event_type
     for r in records:
         if r.event_type == "UNKNOWN":
             r.event_type = r.service
@@ -102,17 +102,7 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
 
     clusters = engine.get_cluster_summary()
 
-    with open("correlation_clusters.txt", "w") as f:
-        f.write("Correlation Report\n" + "=" * 50 + "\n")
-        for c in clusters:
-            f.write(f"\nCluster size={c['size']} score={c['score']}\n")
-            f.write(f"Key: {c['cluster_key']}\n")
-            for m in c["members"]:
-                f.write(
-                    f"{m['timestamp']} {m['host']} {m['service']} {m['correlation_id']}\n"
-                )
 
-    logger.info("Correlation clusters saved")
 
     
     print_summary(records_sorted)

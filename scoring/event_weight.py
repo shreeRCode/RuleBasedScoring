@@ -48,7 +48,7 @@ def compute_event_weight(
     Compute event_weight = w1*severity + w2*event_type + w3*anomaly
     """
 
-    # ── Guard: check feature_service actually ran ────────────────────────
+    #  Guard: check feature_service actually ran 
     # We check log_level (always set by parse_logs) instead of checking
     # severity_score/event_type_score == 0.0, because 0.0 is a VALID score
     # for noise events like "periodic health check". The old guard was

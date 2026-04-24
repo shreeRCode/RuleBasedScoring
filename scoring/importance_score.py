@@ -5,7 +5,7 @@ from parsing.schema import LogRecord
 
 logger = logging.getLogger(__name__)
 
-# ── Labels ──────────────────────────────────────────────────────────────
+# ── Labels 
 
 LABEL_IGNORE   = "ignore"
 LABEL_LOW      = "low"
@@ -14,7 +14,7 @@ LABEL_HIGH     = "high"
 LABEL_CRITICAL = "critical"
 
 
-# ── Default Config ──────────────────────────────────────────────────────
+# ── Default Config 
 
 _DEFAULT_CONFIG: dict[str, float] = {
     "alpha": 0.6,   # event weight
@@ -30,7 +30,7 @@ _DEFAULT_CONFIG: dict[str, float] = {
 _config_cache: dict[str, dict[str, float]] = {}
 
 
-# ── Config Loader ───────────────────────────────────────────────────────
+# ── Config Loader 
 
 def _load_config(config_path: str) -> dict[str, float]:
     if not os.path.exists(config_path):
@@ -51,7 +51,7 @@ def _load_config(config_path: str) -> dict[str, float]:
         return _DEFAULT_CONFIG.copy()
 
 
-# ── Label Assignment ────────────────────────────────────────────────────
+# ── Label Assignment 
 
 def get_label(score: float, cfg: dict[str, float]) -> str:
     if score >= cfg["threshold_critical"]:
@@ -65,7 +65,7 @@ def get_label(score: float, cfg: dict[str, float]) -> str:
     return LABEL_IGNORE
 
 
-# ── Core Scoring Function ───────────────────────────────────────────────
+# ── Core Scoring Function 
 
 def compute_importance_score(
     record: LogRecord,
@@ -77,9 +77,9 @@ def compute_importance_score(
 
     cfg = _config_cache[config_path]
 
-    # ─────────────────────────────────────────
-    # 🔥 FIX 1: soften novelty penalty
-    # ─────────────────────────────────────────
+    # 
+    #  FIX 1: soften novelty penalty
+    # 
     novelty_factor = 0.5 + 0.5 * record.novelty_score
 
     weighted_event = (
@@ -89,25 +89,25 @@ def compute_importance_score(
         * novelty_factor
     )
 
-    # ─────────────────────────────────────────
-    # 🔥 FIX 2: small additive novelty bonus
-    # ─────────────────────────────────────────
+    # 
+    #  FIX 2: small additive novelty bonus
+    # 
     novelty_bonus = cfg["beta"] * record.novelty_score
 
-    # ─────────────────────────────────────────
-    # 🔥 FIX 3: stronger correlation impact
-    # ─────────────────────────────────────────
+    # 
+    #  FIX 3: stronger correlation impact
+    # 
     correlation_term = cfg["gamma"] * record.correlation_score
 
-    # ─────────────────────────────────────────
-    # 🔥 FIX 4: rarity boost (NEW)
-    # ─────────────────────────────────────────
+    # 
+    #  FIX 4: rarity boost (NEW)
+    # 
     rarity_boost = 1.0 / (1.0 + record.frequency)
     rarity_term = 0.3 * rarity_boost
 
-    # ─────────────────────────────────────────
+    # 
     # Final score
-    # ─────────────────────────────────────────
+    # 
     importance_score = (
         weighted_event
         + novelty_bonus
@@ -143,7 +143,7 @@ def compute_importance_score(
     return importance_score, label
 
 
-# ── Batch Scoring ───────────────────────────────────────────────────────
+# ── Batch Scoring ──────────────
 
 def score_batch(
     records: list[LogRecord],
