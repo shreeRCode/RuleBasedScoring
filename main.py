@@ -20,17 +20,11 @@ logger.setLevel(logging.INFO)
 
 
 def load_config(config_path: str = "config/weights.yaml") -> dict:
-    with open(config_path, "r") as fh:
+    with open(config_path, "r", encoding="utf-8") as fh:
         return yaml.safe_load(fh)
 
 
 def format_full_line(record) -> str:
-    """
-    Matches the exact format from the INFO log lines the mentor expects:
-
-    importance_score=2.1940 label=critical [ew=2.49 × conf=1.00 × nov_factor=1.000]
-    [nov_bonus=0.250] [corr=1.00] [rarity=0.300] host=web-server-01 WEB/GET /login 500
-    """
     rarity  = round(1.0 / (1.0 + record.frequency), 3)
     nov_bonus = round(0.25 * record.novelty_score, 3)
     nov_factor = round(0.5 + 0.5 * record.novelty_score, 3)
@@ -52,17 +46,17 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
 
     logger.info("Starting pipeline...")
 
-    # ── Stage 1: Parse ────────────────────────────────────────────────
+    # Stage 1: Parse
     records = list(parse_file(log_file))
     logger.info("Parsed %d records", len(records))
 
-    # ── Stage 1b: Template extraction ────────────────────────────────
+    # Stage 1b: Template extraction
     assign_template_ids_batch(records)
     for r in records:
         if r.event_type == "UNKNOWN":
             r.event_type = r.service
 
-    # ── Stage 2: Features ─────────────────────────────────────────────
+    # Stage 2: Features
     compute_features_batch(records)
     for r in records:
         compute_frequency(r)
@@ -70,30 +64,28 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
     tracker = NoveltyTracker()
     compute_novelty_batch(records, tracker=tracker)
 
-    # ── Stage 3: Event weight ─────────────────────────────────────────
+    # Stage 3: Event weight
     for r in records:
         compute_event_weight(r)
 
-    # ── Stage 4: Correlation ──────────────────────────────────────────
+    # Stage 4: Correlation
     engine = CorrelationEngine(window_seconds=corr_window)
     engine.correlate_batch(records)
 
-    # ── Stage 5: Score ALL records ────────────────────────────────────
+    # Stage 5: Scoring
     score_batch(records, config_path=config_path)
 
-    # ── Sort all by score descending ──────────────────────────────────
+    # Sort by score
     records_sorted = sorted(records, key=lambda r: r.importance_score, reverse=True)
 
-    # ── Write output.txt ─────────────────────────────────────────────
-    with open("output.txt", "w") as f:
+    # ✅ FIX 1: UTF-8 here
+    with open("output.txt", "w", encoding="utf-8") as f:
 
-        # ── Section 1: ALL logs — one line each, exact INFO format ────
         for r in records_sorted:
             f.write(format_full_line(r) + "\n")
 
         f.write("\n")
 
-        # ── Section 2: Top Important Logs ────────────────────────────
         f.write("Top Important Logs:\n")
         f.write("-" * 60 + "\n")
         for r in records_sorted[:10]:
@@ -101,7 +93,6 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
 
         f.write("\n")
 
-        # ── Section 3: Summary ────────────────────────────────────────
         from scoring.scoring_utils import label_distribution, noise_suppression_ratio
         dist  = label_distribution(records_sorted)
         total = len(records_sorted)
@@ -111,11 +102,13 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
         f.write(f"\n{'═' * 50}\n")
         f.write(f"  Scoring summary  ({total} records)\n")
         f.write(f"{'═' * 50}\n")
+
         for label in ("ignore", "low", "medium", "high", "critical"):
             count = dist[label]
             pct   = (count / total * 100) if total else 0
             bar   = "█" * int(pct / 5)
             f.write(f"  {label:8s}  {count:6d}  ({pct:5.1f}%)  {bar}\n")
+
         f.write(f"{'─' * 50}\n")
         f.write(f"  Noise suppression ratio   : {nsr:.1%}\n")
         f.write(f"  Actionable (med+high+crit): {actionable}\n")
@@ -124,16 +117,15 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
 
     logger.info("Output saved to output.txt")
 
-    # ── Console output ────────────────────────────────────────────────
     print("\nTop Important Logs:\n" + "-" * 60)
     for r in records_sorted[:10]:
         print(format_record(r))
 
     print_summary(records_sorted)
 
-    # ── Correlation clusters ──────────────────────────────────────────
+    # ✅ FIX 2: UTF-8 here also
     clusters = engine.get_cluster_summary()
-    with open("correlation_clusters.txt", "w") as f:
+    with open("correlation_clusters.txt", "w", encoding="utf-8") as f:
         f.write("Correlation Report\n" + "=" * 50 + "\n")
         for c in clusters:
             f.write(f"\nCluster size={c['size']} score={c['score']}\n")
@@ -143,9 +135,9 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
                     f"{m['timestamp']}  {m['host']}  "
                     f"{m['service']}  {m['correlation_id']}\n"
                 )
+
     logger.info("Correlation clusters saved")
 
-    # ── Gap report ────────────────────────────────────────────────────
     gaps = gap_report(top_n=10)
     if gaps:
         print("\n--- TEMPLATE GAPS ---")
