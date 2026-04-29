@@ -1,319 +1,247 @@
-"""
-feature_service.py
-──────────────────
-Computes all features on a LogRecord before scoring:
-  - severity_score       (from syslog priority)
-  - event_type_score     (from event_type + event_action semantics)
-  - anomaly_score        (binary: 1.0 if anomalous pattern, else 0.0)
-  - frequency            (count of same template in sliding window)
-  - novelty_score        (1.0 = first time seen, 0.0 = seen constantly)
-  - correlation_score    (set externally by correlation engine)
-
-Event type scores are calibrated against the actual log distribution
-in logs5_fixed.txt. Rare + security-relevant events score highest.
-"""
-
+import re
 import logging
-from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from collections import Counter
+
 from parsing.schema import LogRecord
 
 logger = logging.getLogger(__name__)
 
 
-# ── Event Type Score Table ──────────────────────────────────────────────
-#
-# Scale: 0.0 (pure noise) → 5.0 (critical security event)
-#
-# Calibration notes (from logs5_fixed.txt distribution):
-#   - SYS: periodic health check     → 5080 occurrences → noise floor
-#   - ROUTING: route added/removed   → 5233 occurrences → background churn
-#   - FW: connection allowed         → 2326 occurrences → normal traffic
-#   - APP: User login success        → 1576 occurrences → normal
-#   - APP: Service restarted         → 655  occurrences → worth noting
-#   - WEB: GET /login 500/404        → 952  occurrences → elevated but common
-#   - APP: Database timeout          → 385  occurrences → operational concern
-#   - IDM: privilege escalation      → 34   occurrences → HIGH security
-#   - APP: authentication failed     → 6    occurrences → CRITICAL (brute force)
-#   - SYS: health check FAILED       → 2    occurrences → CRITICAL (outage)
-#   - ROUTING: route flap detected   → 2    occurrences → HIGH (instability)
-#   - WEB: GET /admin 403            → 4    occurrences → HIGH (recon)
-#   - WEB: GET /.env 404             → 2    occurrences → HIGH (secret probe)
-#   - FW: connection denied port=22  → 2    occurrences → HIGH (SSH attack)
-#   - IDM: ACL error                 → 24   occurrences → MEDIUM
+# ── Severity map ─────────────────────────────────────────────────────────────
 
-_EVENT_TYPE_SCORES: dict[str, float] = {
-    # ── CRITICAL (4.5 – 5.0) ─────────────────────────────────────────
-    "authentication failed":        5.0,   # brute force / credential attack
-    "health check FAILED":          4.8,   # system outage signal
-    "connection denied":            4.5,   # blocked attack attempt
-
-    # ── HIGH (3.0 – 4.4) ─────────────────────────────────────────────
-    "privilege escalation attempt": 4.2,   # security violation
-    "route flap detected":          3.8,   # routing instability (network impact)
-    "GET /admin":                   3.5,   # admin recon attempt
-    "GET /.env":                    3.5,   # secret/config file probe
-    "GET /wp-admin":                3.2,   # CMS exploit scan
-    "ACL error":                    3.0,   # network policy violation
-
-    # ── MEDIUM (1.5 – 2.9) ───────────────────────────────────────────
-    "Database timeout":             2.5,   # operational issue
-    "Service restarted":            2.0,   # instability indicator
-    "GET /login 500":               1.8,   # server error on auth endpoint
-    "GET /login 404":               1.5,   # missing resource on auth endpoint
-    "GET /api/data 500":            1.8,   # backend API failure
-
-    # ── LOW (0.5 – 1.4) ──────────────────────────────────────────────
-    "User login success":           0.8,   # normal — but high volume is suspect
-    "GET /login 200":               0.5,   # successful login — normal
-    "GET /api/data 200":            0.3,   # normal API traffic
-    "route added":                  0.4,   # routine routing update
-    "route removed":                0.4,   # routine routing update
-    "port changed state to down":   0.9,   # worth tracking, common
-    "port changed state to up":     0.5,   # recovery event
-    "connection allowed":           0.2,   # normal firewall pass
-
-    # ── IGNORE (0.0 – 0.4) ───────────────────────────────────────────
-    "periodic health check":        0.0,   # pure noise — suppress entirely
+SEVERITY_MAP: dict[str, float] = {
+    "INFO":     1.0,
+    "WARN":     2.0,
+    "ERROR":    3.0,
+    "CRITICAL": 4.0,
 }
 
-# Fallback score for unknown event actions
-_DEFAULT_EVENT_TYPE_SCORE = 1.0
+
+# ── Event type score table ───────────────────────────────────────────────────
+
+EVENT_TYPE_SCORE_TABLE: dict[tuple[str, str], float] = {
+    # OSPF
+    ("OSPF", "NEIGHBOR_DOWN"):        4.0,
+    ("OSPF", "STATE_CHANGE"):         2.5,
+    ("OSPF", "*"):                    2.5,
+
+    # SECURITY
+    ("SECURITY", "PORT_SCAN"):        4.0,
+    ("SECURITY", "MAC_BLOCKED"):      4.0,
+    ("SECURITY", "GENERIC"):          3.0,
+    ("SECURITY", "*"):                3.0,
+
+    # SNMP
+    ("SNMP", "AUTH_FAILURE"):         3.0,
+    ("SNMP", "GENERIC"):              1.0,
+    ("SNMP", "*"):                    1.0,
+
+    # PORT
+    ("PORT", "PORT_DOWN"):            3.0,
+    ("PORT", "PORT_UP"):              1.0,
+    ("PORT", "STATE_CHANGE"):         1.5,
+    ("PORT", "*"):                    1.5,
+
+    # DHCP_SNOOP
+    ("DHCP_SNOOP", "PACKET_DROPPED"): 2.0,
+    ("DHCP_SNOOP", "*"):              2.0,
+
+    # VLAN
+    ("VLAN", "VLAN_ADDED"):           1.0,
+    ("VLAN", "VLAN_REMOVED"):         1.5,
+    ("VLAN", "CHANGE"):               1.0,
+    ("VLAN", "*"):                    1.0,
+
+    # IDM — FIXED: added PRIVILEGE_ESCALATION (critical security event)
+    ("IDM", "PRIVILEGE_ESCALATION"):  4.5,
+    ("IDM", "ACL_ERROR"):             2.5,
+    ("IDM", "GENERIC"):               1.0,
+    ("IDM", "*"):                     1.5,
+
+    # CONFIG
+    ("CONFIG", "CONFIG_CHANGE"):      1.0,
+    ("CONFIG", "GENERIC"):            1.0,
+    ("CONFIG", "*"):                  1.0,
+
+    # SYSLOG
+    ("SYSLOG", "LOGGING_STARTED"):    0.5,
+    ("SYSLOG", "*"):                  0.5,
+
+    # APP — NEW
+    ("APP", "AUTH_FAILED"):           3.5,
+    ("APP", "DB_TIMEOUT"):            2.0,  # WARN-level, lower than AUTH_FAILED
+    ("APP", "SERVICE_RESTART"):       1.5,  # notable but not critical
+    ("APP", "LOGIN_SUCCESS"):         0.3,  # routine, should be ignore/low
+    ("APP", "GENERIC"):               1.0,
+    ("APP", "*"):                     1.0,
+
+    # FW (Firewall) — NEW
+    ("FW", "CONNECTION_DENIED"):      3.0,
+    ("FW", "CONNECTION_ALLOWED"):     0.5,
+    ("FW", "GENERIC"):                1.0,
+    ("FW", "*"):                      0.5,
+
+    # SYS — NEW
+    ("SYS", "HEALTH_CHECK_FAILED"):   4.0,
+    ("SYS", "HEALTH_CHECK_OK"):       0.2,  # pure noise
+    ("SYS", "GENERIC"):               1.0,
+    ("SYS", "*"):                     0.5,
+
+    # WEB — NEW
+    ("WEB", "HTTP_500"):              3.0,
+    ("WEB", "HTTP_403"):              2.5,
+    ("WEB", "HTTP_404"):              1.5,
+    ("WEB", "HTTP_200"):              0.3,
+    ("WEB", "GENERIC"):               1.0,
+    ("WEB", "*"):                     1.0,
+
+    # ROUTING — NEW
+    ("ROUTING", "ROUTE_REMOVED"):     1.2,  # routine BGP churn
+    ("ROUTING", "ROUTE_ADDED"):       0.5,  # routine BGP churn
+    ("ROUTING", "GENERIC"):           0.5,
+    ("ROUTING", "*"):                 0.5,
+}
 
 
-# ── Syslog Priority → Severity Score ───────────────────────────────────
-#
-# Syslog facility*8 + severity. Lower number = more severe.
-# <11> = facility 1 (user), severity 3 (error) → maps to high
-# <185> = facility 23 (local7), severity 1 (alert) → maps to high
-# <186> = facility 23 (local7), severity 2 (critical) → maps to medium
-# <188> = facility 23 (local7), severity 4 (warning) → maps to low
-# <191> = facility 23 (local7), severity 7 (debug) → maps to ignore
+# ── Scored result ────────────────────────────────────────────────────────────
 
-def _log_level_to_severity(log_level: str) -> float:
-    """
-    Convert LogRecord.log_level string to a severity score.
-    log_level is set by parse_logs via priority_to_log_level() in schema.py:
-      CRITICAL -> syslog sev 0-2  (emergency / alert / critical)
-      ERROR    -> syslog sev 3
-      WARN     -> syslog sev 4-5
-      INFO     -> syslog sev 6-7
-    """
-    return {
-        "CRITICAL": 4.0,
-        "ERROR":    3.5,
-        "WARN":     2.0,
-        "INFO":     0.5,
-    }.get((log_level or "INFO").upper(), 1.0)
+@dataclass
+class ScoredResult:
+    score: float
+    confidence: float
+    tier: str
 
 
-#  Anomaly Patterns 
-#
-# Binary flag: 1.0 if event matches a known anomalous pattern.
-# These are heuristics based on the actual log data.
+# ── Pattern rules ────────────────────────────────────────────────────────────
 
-_ANOMALY_PATTERNS = [
-    "privilege escalation attempt",
-    "authentication failed",
-    "health check FAILED",
-    "route flap detected",
-    "connection denied",
-    "GET /admin",
-    "GET /.env",
-    "GET /wp-admin",
-    "ACL error",
-    "GET /login 500",
-    "Database timeout",
+@dataclass
+class PatternRule:
+    pattern: re.Pattern
+    score: float
+    label: str
+    confidence: float
+
+
+PATTERN_SCORE_TABLE: list[PatternRule] = [
+    PatternRule(re.compile(r"timeout|unreachable", re.I), 3.8, "TIMEOUT", 0.65),
+    PatternRule(re.compile(r"(link|interface|port).*(down|fail)", re.I), 3.5, "LINK_DOWN", 0.75),
+    PatternRule(re.compile(r"(auth|authentication).*(fail|error)", re.I), 3.4, "AUTH_FAIL", 0.80),
+    PatternRule(re.compile(r"(acl|access.list).*(deny|block|drop)", re.I), 3.0, "ACL_DENY", 0.70),
+    PatternRule(re.compile(r"(cpu|memory).*(high|exceed|full)", re.I), 2.8, "RESOURCE", 0.70),
+    PatternRule(re.compile(r"(queue|buffer).*(drop)", re.I), 2.5, "QUEUE_DROP", 0.72),
+    PatternRule(re.compile(r"privilege escalation", re.I), 4.5, "PRIV_ESC", 0.95),
+    PatternRule(re.compile(r"health check.*(fail|failed)", re.I), 4.0, "HEALTH_FAIL", 0.90),
 ]
 
 
-def _compute_anomaly_score(record: LogRecord) -> float:
-    """
-    Returns 1.0 if the event_action matches any known anomaly pattern.
-    Returns 0.0 otherwise.
-    """
-    action = record.event_action or ""
-    for pattern in _ANOMALY_PATTERNS:
-        if pattern in action:
-            return 1.0
-    return 0.0
+# ── Keyword tiers ────────────────────────────────────────────────────────────
+
+_KW_CRITICAL = ["fail", "down", "timeout", "error", "drop", "denied", "escalation"]
+_KW_WARNING  = ["warn", "slow", "retry", "high", "restart", "removed"]
+_KW_INFO     = ["start", "success", "up", "ok", "allowed", "added"]
 
 
-#  Sliding Window Frequency Counter 
+# ── Gap tracking ─────────────────────────────────────────────────────────────
 
-class _SlidingWindowCounter:
-    """
-    Tracks per-template_id event frequency in a sliding time window.
-    Used to compute frequency score and novelty.
-    """
-
-    def __init__(self, window_seconds: int = 300):
-        self.window = timedelta(seconds=window_seconds)
-        # template_id → deque of timestamps
-        self._buckets: dict[str, deque] = defaultdict(deque)
-        # template_id → total lifetime count (for novelty)
-        self._lifetime: dict[str, int] = defaultdict(int)
-
-    def record_and_count(self, template_id: str, timestamp: datetime) -> tuple[int, float]:
-        """
-        Records this event and returns:
-          - frequency: count of same template in the sliding window
-          - novelty_score: 1.0 if first ever seen, decays toward 0.0 as count grows
-        """
-        dq = self._buckets[template_id]
-
-        # Evict events outside the window
-        cutoff = timestamp - self.window
-        while dq and dq[0] < cutoff:
-            dq.popleft()
-
-        # Record current event
-        dq.append(timestamp)
-        self._lifetime[template_id] += 1
-
-        frequency = len(dq)
-        lifetime_count = self._lifetime[template_id]
-
-        # Novelty: decays as lifetime count grows
-        # novelty = 1.0 on first occurrence, ~0.5 at 10th, ~0.1 at 100th
-        novelty_score = 1.0 / (1.0 + (lifetime_count - 1) * 0.1)
-        novelty_score = max(0.0, min(1.0, novelty_score))
-
-        return frequency, novelty_score
+fallback_counter: Counter = Counter()
 
 
-# Module-level singleton counter (shared across batch)
-_window_counter = _SlidingWindowCounter(window_seconds=300)
+def _record_gap(et: str, ea: str):
+    fallback_counter[(et, ea)] += 1
 
 
-# ── Public API ──────────────────────────────────────────────────────────
+def gap_report(top_n: int = 20):
+    return [
+        {"event_type": et, "event_action": ea, "miss_count": c}
+        for (et, ea), c in fallback_counter.most_common(top_n)
+    ]
 
-def compute_all_features(record: LogRecord) -> LogRecord:
-    """
-    Computes and sets all feature fields on a LogRecord:
-      - severity_score
-      - event_type_score
-      - anomaly_score
-      - frequency
-      - novelty_score
 
-    Must be called after parse_logs (so event_action is set)
-    and after assign_template_id (so template_id is set).
-    correlation_score is set separately by the correlation engine.
-    """
+# ── Core scoring ─────────────────────────────────────────────────────────────
 
-    # 1. Severity score from log_level string (CRITICAL/ERROR/WARN/INFO)
-    record.severity_score = _log_level_to_severity(record.log_level)
+def get_severity_score(log_level: str) -> float:
+    return SEVERITY_MAP.get(log_level.upper(), 1.0)
 
-    # 2. Event type score — look up by event_action substring match
-    record.event_type_score = _lookup_event_type_score_tracked(record.event_action or "")
 
-    # 3. Anomaly score
-    record.anomaly_score = _compute_anomaly_score(record)
+def get_event_type_score(event_type, event_action, raw_message="") -> ScoredResult:
+    et = (event_type or "*").upper()
+    ea = (event_action or "*").upper()
 
-    # 4. Frequency + novelty from sliding window
-    # timestamp is a str e.g. "Mar 12 10:00:00" — parse it for the window
-    try:
-        ts = datetime.strptime(record.timestamp, "%b %d %H:%M:%S").replace(year=datetime.now().year)
-    except (ValueError, TypeError):
-        ts = datetime.now()
-    tid = record.template_id or record.event_action or "UNKNOWN"
-    record.frequency, record.novelty_score = _window_counter.record_and_count(tid, ts)
+    # Tier 1: exact match
+    score = EVENT_TYPE_SCORE_TABLE.get((et, ea))
+    if score is not None:
+        return ScoredResult(score, 1.0, "exact")
 
-    logger.debug(
-        "features: sev=%.1f etype=%.1f anom=%.1f freq=%d novelty=%.3f  [%s/%s]",
-        record.severity_score,
-        record.event_type_score,
-        record.anomaly_score,
-        record.frequency,
-        record.novelty_score,
+    # Tier 2: wildcard
+    score = EVENT_TYPE_SCORE_TABLE.get((et, "*"))
+    if score is not None:
+        return ScoredResult(score, 0.85, "wildcard")
+
+    # Tier 3: pattern
+    if raw_message:
+        for rule in PATTERN_SCORE_TABLE:
+            if rule.pattern.search(raw_message):
+                return ScoredResult(rule.score, rule.confidence, "pattern")
+
+        msg = raw_message.lower()
+
+        # Tier 4: keyword
+        if any(k in msg for k in _KW_CRITICAL):
+            return ScoredResult(3.5, 0.4, "keyword")
+        if any(k in msg for k in _KW_WARNING):
+            return ScoredResult(2.0, 0.4, "keyword")
+        if any(k in msg for k in _KW_INFO):
+            return ScoredResult(0.8, 0.4, "keyword")
+
+    # Tier 5: fallback
+    _record_gap(et, ea)
+    return ScoredResult(1.2, 0.2, "fallback")
+
+
+# ── Compute features ─────────────────────────────────────────────────────────
+
+def compute_features(record: LogRecord) -> LogRecord:
+    record.severity_score = get_severity_score(record.log_level)
+
+    # Apply domain-knowledge severity override for known-routine events
+    key = (record.event_type.upper(), record.event_action.upper())
+    if key in SEVERITY_OVERRIDE:
+        record.severity_score = SEVERITY_OVERRIDE[key]
+
+    result = get_event_type_score(
         record.event_type,
         record.event_action,
+        record.message,
     )
+
+    record.event_type_score = result.score
+    record.event_type_confidence = result.confidence
+    record.event_type_tier = result.tier
+
+    if record.event_type == "UNKNOWN" and result.tier in ("pattern", "keyword"):
+        record.event_type = result.tier.upper()
 
     return record
 
 
-def compute_all_features_batch(records: list[LogRecord]) -> list[LogRecord]:
-    """
-    Apply feature computation to all records in order.
-    Order matters for the sliding window frequency counter.
-    """
-    for record in records:
-        compute_all_features(record)
+def compute_features_batch(records: list[LogRecord]) -> list[LogRecord]:
+    for r in records:
+        compute_features(r)
     return records
 
 
-def reset_window_counter(window_seconds: int = 300) -> None:
-    """
-    Reset the sliding window counter. Call between test runs
-    or when processing a new log file from scratch.
-    """
-    global _window_counter
-    _window_counter = _SlidingWindowCounter(window_seconds=window_seconds)
+# ── Severity override for events whose syslog PRI is misleadingly high ────────
+# Some datasets encode routine events with ERROR/CRITICAL syslog priority
+# (possibly because the facility bits differ). Override severity_score for
+# known-routine event type+action pairs so domain knowledge wins.
 
-
-#  Aliases expected by main.py 
-
-# main.py imports compute_features_batch — alias to compute_all_features_batch
-compute_features_batch = compute_all_features_batch
-
-
-# ── Gap Report ───────────────────────────────────────────────────────────
-
-# Tracks event_action strings that fell through to the default score
-# so you can see which templates have no explicit mapping yet.
-_gap_misses: dict[str, int] = defaultdict(int)
-
-
-def _lookup_event_type_score_tracked(event_action: str) -> float:
-    """
-    Same as _lookup_event_type_score but records misses for gap_report.
-    Replaces the internal lookup used by compute_all_features.
-    """
-    for pattern, score in _EVENT_TYPE_SCORES.items():
-        if pattern in event_action:
-            return score
-
-    _gap_misses[event_action] += 1
-    logger.debug("No event_type_score match for action: %r", event_action)
-    return _DEFAULT_EVENT_TYPE_SCORE
-
-
-def gap_report(top_n: int = 10) -> list[dict]:
-    """
-    Returns the top_n event_action strings that had no explicit score mapping.
-    Called by main.py after the pipeline completes to surface unmapped templates.
-
-    Returns list of dicts: [{"event_type": str, "event_action": str, "miss_count": int}]
-    """
-    sorted_gaps = sorted(_gap_misses.items(), key=lambda x: x[1], reverse=True)
-    results = []
-    for action, count in sorted_gaps[:top_n]:
-        # Try to split event_type from action if formatted as "TYPE: action"
-        if ": " in action:
-            etype, eaction = action.split(": ", 1)
-        else:
-            etype, eaction = "UNKNOWN", action
-        results.append({
-            "event_type":   etype,
-            "event_action": eaction,
-            "miss_count":   count,
-        })
-    return results
-
-
-# ── Internal Helpers ────────────────────────────────────────────────────
-
-def _lookup_event_type_score(event_action: str) -> float:
-    """
-    Finds the best matching score for an event_action string.
-    Uses substring matching so partial actions still resolve.
-    Falls back to _DEFAULT_EVENT_TYPE_SCORE if no match.
-    """
-    for pattern, score in _EVENT_TYPE_SCORES.items():
-        if pattern in event_action:
-            return score
-
-    logger.debug("No event_type_score match for action: %r", event_action)
-    return _DEFAULT_EVENT_TYPE_SCORE
+SEVERITY_OVERRIDE: dict[tuple[str, str], float] = {
+    ("ROUTING", "ROUTE_ADDED"):    1.0,  # routine BGP churn → treat as INFO
+    ("ROUTING", "ROUTE_REMOVED"):  1.5,  # slightly more notable
+    ("ROUTING", "GENERIC"):        1.0,
+    ("APP",     "LOGIN_SUCCESS"):  1.0,  # success = INFO regardless of PRI
+    ("APP",     "SERVICE_RESTART"):1.5,  # notable but not ERROR-level
+    ("FW",      "CONNECTION_ALLOWED"): 1.0,
+    ("SYS",     "HEALTH_CHECK_OK"): 1.0,
+}

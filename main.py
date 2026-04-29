@@ -7,7 +7,6 @@ from parsing.template_extraction import assign_template_ids_batch
 from features.feature_service import compute_features_batch, gap_report
 from features.frequency import compute_frequency
 from features.novelty import compute_novelty_batch, NoveltyTracker
-from features.anomaly_proximity import compute_anomaly_scores_batch, AnomalyIndex
 
 from scoring.event_weight import compute_event_weight
 from scoring.importance_score import score_batch
@@ -15,8 +14,9 @@ from scoring.scoring_utils import print_summary, format_record
 
 from correlation.correlation_engine import CorrelationEngine
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def load_config(config_path: str = "config/weights.yaml") -> dict:
@@ -24,75 +24,133 @@ def load_config(config_path: str = "config/weights.yaml") -> dict:
         return yaml.safe_load(fh)
 
 
+def format_full_line(record) -> str:
+    """
+    Matches the exact format from the INFO log lines the mentor expects:
+
+    importance_score=2.1940 label=critical [ew=2.49 × conf=1.00 × nov_factor=1.000]
+    [nov_bonus=0.250] [corr=1.00] [rarity=0.300] host=web-server-01 WEB/GET /login 500
+    """
+    rarity  = round(1.0 / (1.0 + record.frequency), 3)
+    nov_bonus = round(0.25 * record.novelty_score, 3)
+    nov_factor = round(0.5 + 0.5 * record.novelty_score, 3)
+
+    return (
+        f"importance_score={record.importance_score:.4f} label={record.label} "
+        f"[ew={record.event_weight:.2f} × conf={record.event_type_confidence:.2f} × nov_factor={nov_factor:.3f}] "
+        f"[nov_bonus={nov_bonus:.3f}] "
+        f"[corr={record.correlation_score:.2f}] "
+        f"[rarity={rarity:.3f}] "
+        f"host={record.host} "
+        f"{record.service}/{record.message}"
+    )
+
+
 def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yaml"):
-    cfg = load_config(config_path)
+    cfg         = load_config(config_path)
     corr_window = cfg.get("correlation_window_seconds", 1800)
 
     logger.info("Starting pipeline...")
 
+    # ── Stage 1: Parse ────────────────────────────────────────────────
     records = list(parse_file(log_file))
     logger.info("Parsed %d records", len(records))
 
+    # ── Stage 1b: Template extraction ────────────────────────────────
     assign_template_ids_batch(records)
-
     for r in records:
         if r.event_type == "UNKNOWN":
             r.event_type = r.service
 
+    # ── Stage 2: Features ─────────────────────────────────────────────
     compute_features_batch(records)
-
     for r in records:
         compute_frequency(r)
 
     tracker = NoveltyTracker()
     compute_novelty_batch(records, tracker=tracker)
 
-    index = AnomalyIndex.from_csv("data/counters.csv", delta_seconds=60)
-    compute_anomaly_scores_batch(records, index)
-
-
-# ✅ DEBUG HERE
-  
-
+    # ── Stage 3: Event weight ─────────────────────────────────────────
     for r in records:
         compute_event_weight(r)
 
+    # ── Stage 4: Correlation ──────────────────────────────────────────
     engine = CorrelationEngine(window_seconds=corr_window)
     engine.correlate_batch(records)
 
-    seen = set()
-    dedup_records = []
+    # ── Stage 5: Score ALL records ────────────────────────────────────
+    score_batch(records, config_path=config_path)
 
-    for r in records:
-        key = r.correlation_id
-        if key not in seen:
-            seen.add(key)
-            dedup_records.append(r)
+    # ── Sort all by score descending ──────────────────────────────────
+    records_sorted = sorted(records, key=lambda r: r.importance_score, reverse=True)
 
-    score_batch(dedup_records, config_path=config_path)
+    # ── Write output.txt ─────────────────────────────────────────────
+    with open("output.txt", "w") as f:
 
-    gaps = gap_report(top_n=10)
+        # ── Section 1: ALL logs — one line each, exact INFO format ────
+        for r in records_sorted:
+            f.write(format_full_line(r) + "\n")
 
-    records_sorted = sorted(
-        dedup_records,
-        key=lambda r: r.importance_score,
-        reverse=True
-    )
+        f.write("\n")
 
+        # ── Section 2: Top Important Logs ────────────────────────────
+        f.write("Top Important Logs:\n")
+        f.write("-" * 60 + "\n")
+        for r in records_sorted[:10]:
+            f.write(format_record(r) + "\n")
+
+        f.write("\n")
+
+        # ── Section 3: Summary ────────────────────────────────────────
+        from scoring.scoring_utils import label_distribution, noise_suppression_ratio
+        dist  = label_distribution(records_sorted)
+        total = len(records_sorted)
+        nsr   = noise_suppression_ratio(records_sorted)
+        actionable = sum(dist[l] for l in ("medium", "high", "critical"))
+
+        f.write(f"\n{'═' * 50}\n")
+        f.write(f"  Scoring summary  ({total} records)\n")
+        f.write(f"{'═' * 50}\n")
+        for label in ("ignore", "low", "medium", "high", "critical"):
+            count = dist[label]
+            pct   = (count / total * 100) if total else 0
+            bar   = "█" * int(pct / 5)
+            f.write(f"  {label:8s}  {count:6d}  ({pct:5.1f}%)  {bar}\n")
+        f.write(f"{'─' * 50}\n")
+        f.write(f"  Noise suppression ratio   : {nsr:.1%}\n")
+        f.write(f"  Actionable (med+high+crit): {actionable}\n")
+        f.write(f"  Critical                  : {dist['critical']}\n")
+        f.write(f"{'═' * 50}\n")
+
+    logger.info("Output saved to output.txt")
+
+    # ── Console output ────────────────────────────────────────────────
     print("\nTop Important Logs:\n" + "-" * 60)
     for r in records_sorted[:10]:
         print(format_record(r))
 
-    with open("output.txt", "w") as f:
-        for r in records_sorted:
-            f.write(format_record(r) + "\n")
-
-    logger.info("Output saved to output.txt")
-
-    clusters = engine.get_cluster_summary()
-
     print_summary(records_sorted)
-   
+
+    # ── Correlation clusters ──────────────────────────────────────────
+    clusters = engine.get_cluster_summary()
+    with open("correlation_clusters.txt", "w") as f:
+        f.write("Correlation Report\n" + "=" * 50 + "\n")
+        for c in clusters:
+            f.write(f"\nCluster size={c['size']} score={c['score']}\n")
+            f.write(f"Key: {c['cluster_key']}\n")
+            for m in c["members"]:
+                f.write(
+                    f"{m['timestamp']}  {m['host']}  "
+                    f"{m['service']}  {m['correlation_id']}\n"
+                )
+    logger.info("Correlation clusters saved")
+
+    # ── Gap report ────────────────────────────────────────────────────
+    gaps = gap_report(top_n=10)
+    if gaps:
+        print("\n--- TEMPLATE GAPS ---")
+        for g in gaps:
+            print(f"  {g['event_type']:15s} | {g['event_action']:20s} → {g['miss_count']} misses")
 
 
 if __name__ == "__main__":
