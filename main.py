@@ -87,7 +87,6 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
         f.write("\n")
 
         f.write("Top Important Logs:\n")
-        f.write("-" * 60 + "\n")
         for r in records_sorted[:10]:
             f.write(format_record(r) + "\n")
 
@@ -99,25 +98,20 @@ def main(log_file: str = "data/logs.txt", config_path: str = "config/weights.yam
         nsr   = noise_suppression_ratio(records_sorted)
         actionable = sum(dist[l] for l in ("medium", "high", "critical"))
 
-        f.write(f"\n{'═' * 50}\n")
-        f.write(f"  Scoring summary  ({total} records)\n")
-        f.write(f"{'═' * 50}\n")
+        f.write(f"\nScoring summary ({total} records)\n")
 
         for label in ("ignore", "low", "medium", "high", "critical"):
             count = dist[label]
             pct   = (count / total * 100) if total else 0
-            bar   = "█" * int(pct / 5)
-            f.write(f"  {label:8s}  {count:6d}  ({pct:5.1f}%)  {bar}\n")
+            f.write(f"{label:8s}: {count:6d} ({pct:5.1f}%)\n")
 
-        f.write(f"{'─' * 50}\n")
-        f.write(f"  Noise suppression ratio   : {nsr:.1%}\n")
-        f.write(f"  Actionable (med+high+crit): {actionable}\n")
-        f.write(f"  Critical                  : {dist['critical']}\n")
-        f.write(f"{'═' * 50}\n")
+        f.write(f"Noise suppression ratio: {nsr:.1%}\n")
+        f.write(f"Actionable (med+high+crit): {actionable}\n")
+        f.write(f"Critical: {dist['critical']}\n")
 
     logger.info("Output saved to output.txt")
 
-    print("\nTop Important Logs:\n" + "-" * 60)
+    print("\nTop Important Logs:")
     for r in records_sorted[:10]:
         print(format_record(r))
 

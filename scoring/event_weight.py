@@ -5,10 +5,10 @@ from parsing.schema import LogRecord
 
 logger = logging.getLogger(__name__)
 
-# w1 + w2 must sum to 1.0 now that anomaly is removed (ML phase only)
+# w1 + w2 must sum to 1.0 in the rule-based scoring phase.
 _DEFAULT_WEIGHTS = {
-    "w1": 0.6,   # severity_score  (raised from 0.5 since w3 removed)
-    "w2": 0.4,   # event_type_score (raised from 0.3)
+    "w1": 0.6,   # severity_score
+    "w2": 0.4,   # event_type_score
 }
 
 _weights_cache: dict[str, dict[str, float]] = {}
@@ -40,9 +40,6 @@ def compute_event_weight(
     """
     Rule-based phase:
         event_weight = w1 * severity_score + w2 * event_type_score
-
-    anomaly_score is intentionally excluded here — it will be added
-    back in the ML phase once Isolation Forest is implemented.
     """
     if record.severity_score == 0.0 or record.event_type_score == 0.0:
         raise ValueError("Feature computation missing before event_weight")

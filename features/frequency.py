@@ -22,7 +22,6 @@ Call order:
     parse_logs.py + template_extraction.py   [Stage 1]
     feature_service.py                       [Stage 2]
     >>> frequency.py                         [Stage 2]  ← this file
-    anomaly_proximity.py                     [Stage 2]
     event_weight.py                          [Stage 3]
 """
 

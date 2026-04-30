@@ -25,7 +25,6 @@ class LogRecord:
     # only a float with no signal about how trustworthy the score was.
     event_type_confidence: float     = 1.0  # 0.0–1.0 from scoring tier
     event_type_tier:  str            = ""   # "exact"|"wildcard"|"pattern"|"keyword"|"fallback"
-    anomaly_score:    float          = 0.0  # 0 or 1  from anomaly_proximity.py
     frequency:        int            = 0    # count of same template_id in last 60 s
 
     # FIX 2: Added novelty_score field. Previously frequency (raw int) was
@@ -34,7 +33,7 @@ class LogRecord:
     novelty_score:    float          = 1.0  # 0.0–1.0 from novelty calculation
 
     # ── Stage 3: Populated by scoring/event_weight.py ─────────────────────
-    event_weight:     float          = 0.0  # w1·sev + w2·evt + w3·anom
+    event_weight:     float          = 0.0  # w1·sev + w2·evt
 
     # ── Stage 4: Populated by correlation/correlation_engine.py ───────────
     correlation_id:   Optional[str]  = None  # UUID shared by a correlated cluster

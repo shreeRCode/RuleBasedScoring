@@ -7,8 +7,8 @@ frequency, novelty scoring, event correlation, and configurable importance
 thresholds.
 
 The current entry point is `main.py`. It reads logs from `data/logs.txt`, scores
-deduplicated correlated events, prints the top records and summary metrics, and
-writes the ranked output to `output.txt`.
+events, prints the top records and summary metrics, and writes the ranked output
+to `output.txt`.
 
 ## Current Pipeline
 
@@ -19,15 +19,13 @@ writes the ranked output to `output.txt`.
 3. Extract semantic `event_type` and `event_action` values from service/message rules.
 4. Run Drain3 template mining and assign dynamic `TEMPLATE_<cluster_id>` IDs.
 5. Fill missing `UNKNOWN` event types with the original service name.
-6. Compute base features: severity, event-type score, heuristic anomaly, provisional frequency, and provisional novelty.
+6. Compute base features: severity, event-type score, confidence, frequency, and novelty.
 7. Recompute frequency with `features.frequency.compute_frequency()`.
 8. Recompute novelty with `features.novelty.NoveltyTracker`.
-9. Run anomaly proximity using counter data from `data/counters.csv`, assigning anomaly scores based on temporal proximity to anomaly spikes.
-10. Compute event weight.
-11. Correlate records by event family, host, event type/action, and time bucket.
-12. Deduplicate records by `correlation_id`.
-13. Compute final importance score and label.
-14. Print the top 10 logs, write `output.txt`, and print summary statistics.
+9. Compute event weight.
+10. Correlate records by event family, host, event type/action, and time bucket.
+11. Compute final importance score and label.
+12. Print the top 10 logs, write `output.txt`, and print summary statistics.
 
 ## Project Structure
 
@@ -40,7 +38,6 @@ RuleBasedScoring/
     weights.yaml                  # Weights, thresholds, and time windows
   data/
     logs.txt                      # Input syslog-style log events
-    counters.csv                  # Counter anomaly data (actively used)
   parsing/
     parse_logs.py                 # Syslog parser and semantic event extraction
     drain_parser.py               # Drain3 TemplateMiner wrapper
@@ -50,7 +47,6 @@ RuleBasedScoring/
     feature_service.py            # Base feature computation and scoring gaps
     frequency.py                  # Sliding-window template frequency
     novelty.py                    # Frequency-history novelty/spike scoring
-    anomaly_proximity.py          # Counter anomaly proximity utilities
   scoring/
     event_weight.py               # Event weight formula
     importance_score.py           # Final score and label logic
@@ -96,9 +92,6 @@ Config file:      config/weights.yaml
 Scored output:    output.txt
 ```
 
-`main.py` currently computes cluster summaries internally but does not write a
-separate cluster report file.
-
 ## Input Format
 
 The parser expects lines in this form:
@@ -116,32 +109,18 @@ Example:
 
 ## Feature Scoring
 
-Each `LogRecord` carries these feature fields:
+Each `LogRecord` carries these active feature fields:
 
 - `severity_score`
 - `event_type_score`
-- `anomaly_score`
+- `event_type_confidence`
 - `frequency`
 - `novelty_score`
 - `correlation_score`
 
-### Anomaly Scoring (Updated)
-
-The system incorporates anomaly signals from `data/counters.csv`.
-
-- High counter values indicate anomaly spikes.
-- Logs occurring within a configurable time window (default ±60 seconds)
-  of these timestamps are assigned:
-
-```text
-anomaly_score = 1.0
-```
-
-- This score is combined with heuristic anomaly detection using:
-
-```text
-record.anomaly_score = max(heuristic_score, proximity_score)
-```
+Anomaly scoring is intentionally excluded from this rule-based version. That
+signal should be generated dynamically by an ML or statistical detector, not
+hard-coded from a CSV.
 
 ## Scoring Formulas
 
@@ -150,15 +129,13 @@ record.anomaly_score = max(heuristic_score, proximity_score)
 ```text
 event_weight = (w1 * severity_score)
              + (w2 * event_type_score)
-             + (w3 * anomaly_score)
 ```
 
 Defaults from `config/weights.yaml`:
 
 ```yaml
-w1: 0.5
-w2: 0.3
-w3: 0.2
+w1: 0.6
+w2: 0.4
 ```
 
 ### Importance Score
@@ -196,5 +173,4 @@ score >= 2.0       -> critical
 - Most stages mutate `LogRecord` objects in place.
 - Frequency and novelty are order-sensitive.
 - Config loading in scoring modules is cached.
-- `data/counters.csv` is actively used for anomaly detection via temporal proximity.
-- Effectiveness of anomaly scoring depends on alignment between log timestamps and anomaly spikes.
+- `main.py` currently computes correlation internally but does not write a separate cluster report file.

@@ -1,8 +1,7 @@
-# ── event_weight formula (w1 + w2 + w3 = 1.0) ───────────────────────────────
-# event_weight = (w1 * severity_score) + (w2 * event_type_score) + (w3 * anomaly_score)
+# ── event_weight formula (w1 + w2 = 1.0) ───────────────────────────────────
+# event_weight = (w1 * severity_score) + (w2 * event_type_score)
 w1: 0.6 # severity_score    — log level severity
 w2: 0.4 # event_type_score  — domain knowledge lookup
-# w3 (anomaly_score) removed — will be added in ML phase
 
 # ── importance_score formula weights ─────────────────────────────────────────
 # importance_score = (alpha * event_weight * confidence * novelty_factor)
@@ -22,5 +21,4 @@ threshold_critical: 2.0
 
 # ── Sliding window sizes ──────────────────────────────────────────────────────
 frequency_window_seconds: 60
-anomaly_proximity_delta_seconds: 30
 correlation_window_seconds: 1800

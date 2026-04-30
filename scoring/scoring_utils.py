@@ -68,21 +68,20 @@ def format_record(record: LogRecord, verbose: bool = False) -> str:
         )
 
     lines = [
-        f"{'─' * 60}",
+        f"{'-' * 60}",
         f"  timestamp    : {record.timestamp}",
         f"  host         : {record.host}",
         f"  service      : {record.service}",
         f"  log_level    : {record.log_level}",
         f"  event        : {record.event_type}/{record.event_action}",
         f"  template_id  : {record.template_id}",
-        f"  message      : {record.message[:80]}{'…' if len(record.message) > 80 else ''}",
+        f"  message      : {record.message[:80]}{'...' if len(record.message) > 80 else ''}",
         f"   features ",
         f"  severity_score       : {record.severity_score:.1f}",
         f"  event_type_score     : {record.event_type_score:.1f}",
        
         f"  event_type_confidence: {record.event_type_confidence:.2f}  "
         f"(tier: {record.event_type_tier or 'unknown'})",
-        f"  anomaly_score        : {record.anomaly_score:.1f}",
         f"  frequency            : {record.frequency}",
        
         f"  novelty_score        : {record.novelty_score:.4f}",
@@ -92,7 +91,7 @@ def format_record(record: LogRecord, verbose: bool = False) -> str:
         f"  correlation_score    : {record.correlation_score:.4f}",
         f"  importance_score     : {record.importance_score:.4f}",
         f"  label                : {label_upper}",
-        f"{'─' * 60}",
+        f"{'-' * 60}",
     ]
     return "\n".join(lines)
 
@@ -104,21 +103,16 @@ def print_summary(records: list[LogRecord]) -> None:
     total = len(records)
     nsr   = noise_suppression_ratio(records)
 
-    print(f"\n{'═' * 50}")
-    print(f"  Scoring summary  ({total} records)")
-    print(f"{'═' * 50}")
+    print(f"\nScoring summary ({total} records)")
 
     for label in ALL_LABELS:
         count = dist[label]
         pct   = (count / total * 100) if total else 0
-        bar   = "█" * int(pct / 5)
-        print(f"  {label:8s}  {count:6d}  ({pct:5.1f}%)  {bar}")
+        print(f"{label:8s}: {count:6d} ({pct:5.1f}%)")
 
-    print(f"{'─' * 50}")
-    print(f"  Noise suppression ratio   : {nsr:.1%}")
-    print(f"  Actionable (med+high+crit): {len(actionable_records(records))}")
-    print(f"  Critical                  : {len(critical_records(records))}")
-    print(f"{'═' * 50}\n")
+    print(f"Noise suppression ratio: {nsr:.1%}")
+    print(f"Actionable (med+high+crit): {len(actionable_records(records))}")
+    print(f"Critical: {len(critical_records(records))}\n")
 
 
 #  Self-test 
@@ -165,7 +159,6 @@ if __name__ == "__main__":
     r.correlation_score = 2.0
     r.frequency         = 5
     r.novelty_score     = 0.85
-    r.anomaly_score     = 1.0
     r.event_weight      = 2.6
     r.importance_score  = 2.8
     r.label             = LABEL_CRITICAL
