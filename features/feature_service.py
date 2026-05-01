@@ -199,6 +199,22 @@ def get_event_type_score(event_type, event_action, raw_message="") -> ScoredResu
     return ScoredResult(1.2, 0.2, "fallback")
 
 
+
+# ── Severity override for events whose syslog PRI is misleadingly high ────────
+# Some datasets encode routine events with ERROR/CRITICAL syslog priority
+# (possibly because the facility bits differ). Override severity_score for
+# known-routine event type+action pairs so domain knowledge wins.
+
+SEVERITY_OVERRIDE: dict[tuple[str, str], float] = {
+    ("ROUTING", "ROUTE_ADDED"):    1.0,  # routine BGP churn → treat as INFO
+    ("ROUTING", "ROUTE_REMOVED"):  1.5,  # slightly more notable
+    ("ROUTING", "GENERIC"):        1.0,
+    ("APP",     "LOGIN_SUCCESS"):  1.0,  # success = INFO regardless of PRI
+    ("APP",     "SERVICE_RESTART"):1.5,  # notable but not ERROR-level
+    ("FW",      "CONNECTION_ALLOWED"): 1.0,
+    ("SYS",     "HEALTH_CHECK_OK"): 1.0,
+}
+
 # ── Compute features ─────────────────────────────────────────────────────────
 
 def compute_features(record: LogRecord) -> LogRecord:
@@ -229,19 +245,3 @@ def compute_features_batch(records: list[LogRecord]) -> list[LogRecord]:
     for r in records:
         compute_features(r)
     return records
-
-
-# ── Severity override for events whose syslog PRI is misleadingly high ────────
-# Some datasets encode routine events with ERROR/CRITICAL syslog priority
-# (possibly because the facility bits differ). Override severity_score for
-# known-routine event type+action pairs so domain knowledge wins.
-
-SEVERITY_OVERRIDE: dict[tuple[str, str], float] = {
-    ("ROUTING", "ROUTE_ADDED"):    1.0,  # routine BGP churn → treat as INFO
-    ("ROUTING", "ROUTE_REMOVED"):  1.5,  # slightly more notable
-    ("ROUTING", "GENERIC"):        1.0,
-    ("APP",     "LOGIN_SUCCESS"):  1.0,  # success = INFO regardless of PRI
-    ("APP",     "SERVICE_RESTART"):1.5,  # notable but not ERROR-level
-    ("FW",      "CONNECTION_ALLOWED"): 1.0,
-    ("SYS",     "HEALTH_CHECK_OK"): 1.0,
-}
